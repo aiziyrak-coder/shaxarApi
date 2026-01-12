@@ -6,15 +6,20 @@ import qrcode
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.conf import settings
+from django.db import transaction
 from .models import WasteBin
 
 
 @receiver(post_save, sender=WasteBin)
-def generate_qr_code_on_create(sender, instance, created, **kwargs):
+def generate_qr_code_on_create(sender, instance, created, raw, **kwargs):
     """
     Automatically generate QR code when a new WasteBin is created
     """
-    if created and not instance.qr_code_url:
+    # Skip if loading fixtures or not newly created
+    if raw or not created or instance.qr_code_url:
+        return
+    
+    def create_qr_code():
         # Create QR codes directory if it doesn't exist
         qr_codes_dir = os.path.join(settings.MEDIA_ROOT, 'qr_codes')
         os.makedirs(qr_codes_dir, exist_ok=True)
@@ -41,8 +46,12 @@ def generate_qr_code_on_create(sender, instance, created, **kwargs):
         # Update the bin's QR code URL field (use production URL)
         qr_url = f"https://ferganaapi.cdcgroup.uz/media/qr_codes/{qr_filename}"
         
-        # Update the bin object with the QR code URL (use update to avoid infinite loop)
+        # Update the bin object with the QR code URL
+        # Use update() to avoid triggering signal again
         WasteBin.objects.filter(pk=instance.pk).update(qr_code_url=qr_url)
         
         print(f'✅ QR code auto-generated for waste bin {instance.id}')
         print(f'   QR URL: {qr_url}')
+    
+    # Execute after transaction commits to ensure DB consistency
+    transaction.on_commit(create_qr_code)

@@ -9,6 +9,9 @@ class SmartcityAppConfig(AppConfig):
     name = 'smartcity_app'
 
     def ready(self):
+        # Import signals to register them
+        import smartcity_app.signals  # noqa
+        
         # Start the background task to analyze waste bins every 30 minutes
         from django.conf import settings
         if settings.DEBUG:  # Only run in development

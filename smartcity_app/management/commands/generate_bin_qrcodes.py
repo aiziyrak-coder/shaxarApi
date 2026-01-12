@@ -41,8 +41,8 @@ class Command(BaseCommand):
             
             img.save(qr_path)
             
-            # Update the bin's QR code URL field
-            qr_url = f"http://127.0.0.1:8000/media/qr_codes/{qr_filename}"
+            # Update the bin's QR code URL field (use production URL)
+            qr_url = f"https://ferganaapi.cdcgroup.uz/media/qr_codes/{qr_filename}"
             
             # Update the bin object with the QR code URL
             bin_obj.qr_code_url = qr_url

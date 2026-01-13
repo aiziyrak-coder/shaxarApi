@@ -5,7 +5,9 @@ from .models import (
     MoistureSensor, Room, Boiler, Facility, AirSensor, SOSColumn, 
     EcoViolation, ConstructionMission, ConstructionSite, LightROI, 
     LightPole, Bus, ResponsibleOrg, CallRequest, CallRequestTimeline, 
-    Notification, ReportEntry, UtilityNode, DeviceHealth, IoTDevice
+    Notification, ReportEntry, UtilityNode, DeviceHealth, IoTDevice,
+    WasteTask, RouteOptimization, AlertNotification, ClimateSchedule,
+    EnergyReport, WastePrediction, MaintenanceSchedule, DriverPerformance
 )
 
 
@@ -733,3 +735,84 @@ class UtilityNodeSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
+
+
+# ==================== NEW SERIALIZERS FOR ENHANCED FUNCTIONALITY ====================
+
+class WasteTaskSerializer(serializers.ModelSerializer):
+    waste_bin = WasteBinSerializer(read_only=True)
+    assigned_truck = TruckSerializer(read_only=True)
+    waste_bin_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    assigned_truck_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    
+    class Meta:
+        model = WasteTask
+        fields = '__all__'
+
+
+class RouteOptimizationSerializer(serializers.ModelSerializer):
+    truck = TruckSerializer(read_only=True)
+    truck_id = serializers.UUIDField(write_only=True)
+    
+    class Meta:
+        model = RouteOptimization
+        fields = '__all__'
+
+
+class AlertNotificationSerializer(serializers.ModelSerializer):
+    related_waste_bin = WasteBinSerializer(read_only=True)
+    related_facility = FacilitySerializer(read_only=True)
+    related_truck = TruckSerializer(read_only=True)
+    
+    class Meta:
+        model = AlertNotification
+        fields = '__all__'
+
+
+class ClimateScheduleSerializer(serializers.ModelSerializer):
+    facility = FacilitySerializer(read_only=True)
+    boiler = BoilerSerializer(read_only=True)
+    facility_id = serializers.UUIDField(write_only=True)
+    boiler_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    
+    class Meta:
+        model = ClimateSchedule
+        fields = '__all__'
+
+
+class EnergyReportSerializer(serializers.ModelSerializer):
+    facility = FacilitySerializer(read_only=True)
+    facility_id = serializers.UUIDField(write_only=True)
+    
+    class Meta:
+        model = EnergyReport
+        fields = '__all__'
+
+
+class WastePredictionSerializer(serializers.ModelSerializer):
+    waste_bin = WasteBinSerializer(read_only=True)
+    waste_bin_id = serializers.UUIDField(write_only=True)
+    
+    class Meta:
+        model = WastePrediction
+        fields = '__all__'
+
+
+class MaintenanceScheduleSerializer(serializers.ModelSerializer):
+    facility = FacilitySerializer(read_only=True)
+    boiler = BoilerSerializer(read_only=True)
+    facility_id = serializers.UUIDField(write_only=True)
+    boiler_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    
+    class Meta:
+        model = MaintenanceSchedule
+        fields = '__all__'
+
+
+class DriverPerformanceSerializer(serializers.ModelSerializer):
+    truck = TruckSerializer(read_only=True)
+    truck_id = serializers.UUIDField(write_only=True)
+    
+    class Meta:
+        model = DriverPerformance
+        fields = '__all__'

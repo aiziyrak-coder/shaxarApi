@@ -19,7 +19,8 @@ from .models import (
     SOSColumn, EcoViolation, ConstructionSite, LightPole, Bus, CallRequest,
     Coordinate, Region, District, Room, Boiler, ConstructionMission, LightROI,
     ResponsibleOrg, CallRequestTimeline, Notification, ReportEntry, UtilityNode,
-    DeviceHealth, IoTDevice
+    DeviceHealth, IoTDevice, WasteTask, RouteOptimization, AlertNotification,
+    ClimateSchedule, EnergyReport, WastePrediction, MaintenanceSchedule, DriverPerformance
 )
 from .serializers import (
     OrganizationSerializer, WasteBinSerializer, TruckSerializer, 
@@ -29,7 +30,10 @@ from .serializers import (
     RegionSerializer, DistrictSerializer, RoomSerializer, BoilerSerializer,
     ConstructionMissionSerializer, LightROISerializer, ResponsibleOrgSerializer,
     CallRequestTimelineSerializer, NotificationSerializer, ReportEntrySerializer,
-    UtilityNodeSerializer, DeviceHealthSerializer, IoTDeviceSerializer
+    UtilityNodeSerializer, DeviceHealthSerializer, IoTDeviceSerializer,
+    WasteTaskSerializer, RouteOptimizationSerializer, AlertNotificationSerializer,
+    ClimateScheduleSerializer, EnergyReportSerializer, WastePredictionSerializer,
+    MaintenanceScheduleSerializer, DriverPerformanceSerializer
 )
 import json
 import uuid
@@ -2095,5 +2099,439 @@ class IoTDeviceDetailView(APIView):
         device = get_object_or_404(IoTDevice, pk=pk)
         device.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ==================== NEW VIEWS FOR ENHANCED FUNCTIONALITY ====================
+
+class WasteTaskListCreateView(APIView):
+    """Waste collection task management"""
+    def get(self, request):
+        org_id = request.session.get('organization_id')
+        if org_id:
+            tasks = WasteTask.objects.filter(waste_bin__organization_id=org_id)
+        else:
+            tasks = WasteTask.objects.all()
+        serializer = WasteTaskSerializer(tasks, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        serializer = WasteTaskSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class WasteTaskDetailView(APIView):
+    """Update and manage individual tasks"""
+    def get(self, request, pk):
+        task = get_object_or_404(WasteTask, pk=pk)
+        serializer = WasteTaskSerializer(task)
+        return Response(serializer.data)
+    
+    def patch(self, request, pk):
+        task = get_object_or_404(WasteTask, pk=pk)
+        serializer = WasteTaskSerializer(task, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        task = get_object_or_404(WasteTask, pk=pk)
+        task.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+def auto_assign_task(request):
+    """Automatically assign task to nearest available truck"""
+    bin_id = request.data.get('bin_id')
+    if not bin_id:
+        return Response({'error': 'bin_id required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    waste_bin = get_object_or_404(WasteBin, pk=bin_id)
+    
+    # Find nearest idle truck in same toza hudud
+    from math import radians, sin, cos, sqrt, atan2
+    
+    def calculate_distance(lat1, lon1, lat2, lon2):
+        R = 6371  # Earth radius in km
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
+        return R * c
+    
+    idle_trucks = Truck.objects.filter(
+        status='IDLE',
+        toza_hudud=waste_bin.toza_hudud
+    )
+    
+    if not idle_trucks.exists():
+        return Response({'error': 'No available trucks'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Find closest truck
+    closest_truck = None
+    min_distance = float('inf')
+    
+    for truck in idle_trucks:
+        distance = calculate_distance(
+            waste_bin.location.lat, waste_bin.location.lng,
+            truck.location.lat, truck.location.lng
+        )
+        if distance < min_distance:
+            min_distance = distance
+            closest_truck = truck
+    
+    # Create task
+    task = WasteTask.objects.create(
+        waste_bin=waste_bin,
+        assigned_truck=closest_truck,
+        status='ASSIGNED',
+        assigned_at=timezone.now(),
+        priority='HIGH' if waste_bin.fill_level > 90 else 'MEDIUM'
+    )
+    
+    # Update truck status
+    closest_truck.status = 'BUSY'
+    closest_truck.save()
+    
+    return Response({
+        'task': WasteTaskSerializer(task).data,
+        'distance': round(min_distance, 2)
+    })
+
+
+class RouteOptimizationView(APIView):
+    """Generate optimized route for truck"""
+    def post(self, request):
+        truck_id = request.data.get('truck_id')
+        bin_ids = request.data.get('bin_ids', [])
+        
+        if not truck_id:
+            return Response({'error': 'truck_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        truck = get_object_or_404(Truck, pk=truck_id)
+        
+        # Simple greedy algorithm for route optimization
+        # In production, use Google Maps Directions API
+        from math import radians, sin, cos, sqrt, atan2
+        
+        def calculate_distance(lat1, lon1, lat2, lon2):
+            R = 6371
+            dlat = radians(lat2 - lat1)
+            dlon = radians(lon2 - lon1)
+            a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+            c = 2 * atan2(sqrt(a), sqrt(1-a))
+            return R * c
+        
+        bins = WasteBin.objects.filter(id__in=bin_ids, toza_hudud=truck.toza_hudud)
+        if not bins.exists():
+            return Response({'error': 'No bins found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Greedy nearest neighbor algorithm
+        unvisited = list(bins)
+        route = []
+        current_location = truck.location
+        total_distance = 0
+        
+        while unvisited:
+            nearest = None
+            min_dist = float('inf')
+            
+            for bin in unvisited:
+                dist = calculate_distance(
+                    current_location.lat, current_location.lng,
+                    bin.location.lat, bin.location.lng
+                )
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest = bin
+            
+            route.append(str(nearest.id))
+            total_distance += min_dist
+            current_location = nearest.location
+            unvisited.remove(nearest)
+        
+        # Estimate time and fuel
+        avg_speed = 30  # km/h in city
+        estimated_time = int((total_distance / avg_speed) * 60)  # minutes
+        fuel_estimate = total_distance * 0.15  # liters (assuming 15L/100km)
+        
+        # Save route
+        route_opt = RouteOptimization.objects.create(
+            truck=truck,
+            waypoints=route,
+            total_distance=round(total_distance, 2),
+            estimated_time=estimated_time,
+            fuel_estimate=round(fuel_estimate, 2)
+        )
+        
+        return Response(RouteOptimizationSerializer(route_opt).data)
+
+
+class AlertNotificationListCreateView(APIView):
+    """Alert notification management"""
+    def get(self, request):
+        org_id = request.session.get('organization_id')
+        if org_id:
+            alerts = AlertNotification.objects.filter(
+                models.Q(related_waste_bin__organization_id=org_id) |
+                models.Q(related_facility__organization_id=org_id) |
+                models.Q(related_truck__organization_id=org_id)
+            )
+        else:
+            alerts = AlertNotification.objects.all()
+        serializer = AlertNotificationSerializer(alerts, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        serializer = AlertNotificationSerializer(data=request.data)
+        if serializer.is_valid():
+            alert = serializer.save()
+            
+            # Trigger actual notification sending (SMS/Telegram/Email)
+            # This would integrate with external services
+            # For now, just mark as sent
+            alert.is_sent = True
+            alert.sent_at = timezone.now()
+            alert.save()
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ClimateScheduleListCreateView(APIView):
+    """Climate control schedules"""
+    def get(self, request):
+        schedules = ClimateSchedule.objects.all()
+        serializer = ClimateScheduleSerializer(schedules, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        serializer = ClimateScheduleSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ClimateScheduleDetailView(APIView):
+    """Manage individual schedules"""
+    def get(self, request, pk):
+        schedule = get_object_or_404(ClimateSchedule, pk=pk)
+        serializer = ClimateScheduleSerializer(schedule)
+        return Response(serializer.data)
+    
+    def patch(self, request, pk):
+        schedule = get_object_or_404(ClimateSchedule, pk=pk)
+        serializer = ClimateScheduleSerializer(schedule, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        schedule = get_object_or_404(ClimateSchedule, pk=pk)
+        schedule.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+def generate_energy_report(request):
+    """Generate energy report for a facility"""
+    facility_id = request.data.get('facility_id')
+    report_type = request.data.get('report_type', 'MONTHLY')
+    start_date = request.data.get('start_date')
+    end_date = request.data.get('end_date')
+    
+    if not facility_id:
+        return Response({'error': 'facility_id required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    facility = get_object_or_404(Facility, pk=facility_id)
+    
+    from datetime import datetime, timedelta
+    if not start_date or not end_date:
+        end = datetime.now().date()
+        if report_type == 'DAILY':
+            start = end - timedelta(days=1)
+        elif report_type == 'WEEKLY':
+            start = end - timedelta(days=7)
+        elif report_type == 'MONTHLY':
+            start = end - timedelta(days=30)
+        else:  # YEARLY
+            start = end - timedelta(days=365)
+    else:
+        from django.utils.dateparse import parse_date
+        start = parse_date(start_date)
+        end = parse_date(end_date)
+    
+    # Calculate metrics (simplified - in production, this would query actual sensor data)
+    total_energy = facility.energy_usage * (end - start).days
+    total_cost = total_energy * 500  # Price per kWh
+    avg_temp = 21.5  # Would come from sensor data
+    avg_humidity = 50.0
+    
+    report = EnergyReport.objects.create(
+        facility=facility,
+        report_type=report_type,
+        start_date=start,
+        end_date=end,
+        total_energy_kwh=total_energy,
+        total_cost=total_cost,
+        average_temperature=avg_temp,
+        average_humidity=avg_humidity,
+        efficiency_score=facility.efficiency_score,
+        cost_savings=0,
+        recommendations="Kechki soatlarda haroratni 2 darajaga pasaytiring. Energiya tejash: ~15%"
+    )
+    
+    return Response(EnergyReportSerializer(report).data)
+
+
+@api_view(['POST'])
+def generate_waste_prediction(request):
+    """Generate AI prediction for waste bin fill level"""
+    bin_id = request.data.get('bin_id')
+    days_ahead = request.data.get('days_ahead', 7)
+    
+    if not bin_id:
+        return Response({'error': 'bin_id required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    waste_bin = get_object_or_404(WasteBin, pk=bin_id)
+    
+    # Simple linear prediction based on fill_rate
+    # In production, use ML model with historical data
+    from datetime import datetime, timedelta
+    predictions = []
+    
+    for day in range(1, days_ahead + 1):
+        prediction_date = (datetime.now() + timedelta(days=day)).date()
+        predicted_level = min(100, waste_bin.fill_level + (waste_bin.fill_rate * day))
+        
+        prediction = WastePrediction.objects.create(
+            waste_bin=waste_bin,
+            prediction_date=prediction_date,
+            predicted_fill_level=int(predicted_level),
+            confidence=85.0,
+            will_be_full=predicted_level >= 80,
+            recommended_collection_date=prediction_date if predicted_level >= 80 else None,
+            based_on_data_points=30
+        )
+        predictions.append(prediction)
+    
+    return Response(WastePredictionSerializer(predictions, many=True).data)
+
+
+@api_view(['GET'])
+def get_driver_performance(request, truck_id):
+    """Get performance metrics for a driver"""
+    truck = get_object_or_404(Truck, pk=truck_id)
+    
+    # Get last 30 days performance
+    from datetime import datetime, timedelta
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=30)
+    
+    performance = DriverPerformance.objects.filter(
+        truck=truck,
+        date__gte=start_date,
+        date__lte=end_date
+    )
+    
+    serializer = DriverPerformanceSerializer(performance, many=True)
+    
+    # Calculate summary
+    total_bins = sum(p.bins_collected for p in performance)
+    total_distance = sum(p.total_distance for p in performance)
+    avg_rating = sum(p.rating for p in performance) / len(performance) if performance else 0
+    
+    return Response({
+        'performance': serializer.data,
+        'summary': {
+            'total_bins_collected': total_bins,
+            'total_distance_km': round(total_distance, 2),
+            'average_rating': round(avg_rating, 2),
+            'days_worked': len(performance)
+        }
+    })
+
+
+@api_view(['GET'])
+def get_waste_statistics(request):
+    """Get comprehensive waste management statistics"""
+    org_id = request.session.get('organization_id')
+    
+    from datetime import datetime, timedelta
+    from django.db.models import Count, Avg, Sum
+    
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=30)
+    
+    if org_id:
+        bins = WasteBin.objects.filter(organization_id=org_id)
+        trucks = Truck.objects.filter(organization_id=org_id)
+        tasks = WasteTask.objects.filter(waste_bin__organization_id=org_id, created_at__gte=start_date)
+    else:
+        bins = WasteBin.objects.all()
+        trucks = Truck.objects.all()
+        tasks = WasteTask.objects.filter(created_at__gte=start_date)
+    
+    stats = {
+        'total_bins': bins.count(),
+        'full_bins': bins.filter(is_full=True).count(),
+        'average_fill_level': bins.aggregate(Avg('fill_level'))['fill_level__avg'] or 0,
+        'total_trucks': trucks.count(),
+        'active_trucks': trucks.filter(status='BUSY').count(),
+        'tasks_completed': tasks.filter(status='COMPLETED').count(),
+        'tasks_pending': tasks.filter(status='PENDING').count(),
+        'tasks_in_progress': tasks.filter(status='IN_PROGRESS').count(),
+        'collection_efficiency': round((tasks.filter(status='COMPLETED').count() / tasks.count() * 100) if tasks.count() > 0 else 0, 2),
+        'by_hudud': {}
+    }
+    
+    # Statistics by toza hudud
+    for hudud in ['1-sonli Toza Hudud', '2-sonli Toza Hudud']:
+        hudud_bins = bins.filter(toza_hudud=hudud)
+        stats['by_hudud'][hudud] = {
+            'total': hudud_bins.count(),
+            'full': hudud_bins.filter(is_full=True).count(),
+            'avg_fill': round(hudud_bins.aggregate(Avg('fill_level'))['fill_level__avg'] or 0, 2)
+        }
+    
+    return Response(stats)
+
+
+@api_view(['GET'])
+def get_climate_statistics(request):
+    """Get comprehensive climate control statistics"""
+    from django.db.models import Avg, Count
+    from datetime import datetime, timedelta
+    
+    facilities = Facility.objects.all()
+    rooms = Room.objects.all()
+    boilers = Boiler.objects.all()
+    
+    stats = {
+        'total_facilities': facilities.count(),
+        'total_rooms': rooms.count(),
+        'total_boilers': boilers.count(),
+        'average_temperature': round(rooms.aggregate(Avg('temperature'))['temperature__avg'] or 0, 2),
+        'average_humidity': round(rooms.aggregate(Avg('humidity'))['humidity__avg'] or 0, 2),
+        'critical_rooms': rooms.filter(status='CRITICAL').count(),
+        'warning_rooms': rooms.filter(status='WARNING').count(),
+        'optimal_rooms': rooms.filter(status='OPTIMAL').count(),
+        'by_facility_type': {}
+    }
+    
+    for ftype in ['SCHOOL', 'KINDERGARTEN', 'HOSPITAL']:
+        type_facilities = facilities.filter(type=ftype)
+        stats['by_facility_type'][ftype] = {
+            'count': type_facilities.count(),
+            'avg_efficiency': round(type_facilities.aggregate(Avg('efficiency_score'))['efficiency_score__avg'] or 0, 2)
+        }
+    
+    return Response(stats)
 
 

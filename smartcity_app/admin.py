@@ -5,7 +5,9 @@ from .models import (
     MoistureSensor, Room, Boiler, Facility, AirSensor, SOSColumn,
     EcoViolation, ConstructionMission, ConstructionSite, LightROI,
     LightPole, Bus, ResponsibleOrg, CallRequest, CallRequestTimeline,
-    Notification, ReportEntry, UtilityNode, DeviceHealth, IoTDevice
+    Notification, ReportEntry, UtilityNode, DeviceHealth, IoTDevice,
+    WasteTask, RouteOptimization, AlertNotification, ClimateSchedule,
+    EnergyReport, WastePrediction, MaintenanceSchedule, DriverPerformance
 )
 
 # Import Room separately to avoid admin issues
@@ -243,3 +245,66 @@ class IoTDeviceAdmin(admin.ModelAdmin):
     list_display = ['id', 'device_id', 'device_type', 'is_active', 'last_seen', 'room', 'boiler', 'current_temperature', 'current_humidity']
     list_filter = ['device_type', 'is_active']
     search_fields = ['device_id', 'id']
+
+
+# ==================== NEW ADMIN INTERFACES ====================
+
+@admin.register(WasteTask)
+class WasteTaskAdmin(admin.ModelAdmin):
+    list_display = ['id', 'waste_bin', 'assigned_truck', 'status', 'priority', 'created_at', 'completed_at']
+    list_filter = ['status', 'priority', 'created_at']
+    search_fields = ['id', 'waste_bin__address', 'assigned_truck__driver_name']
+    readonly_fields = ['created_at']
+
+
+@admin.register(RouteOptimization)
+class RouteOptimizationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'truck', 'total_distance', 'estimated_time', 'fuel_estimate', 'created_at', 'is_active']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['id', 'truck__driver_name']
+    readonly_fields = ['created_at']
+
+
+@admin.register(AlertNotification)
+class AlertNotificationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'alert_type', 'severity', 'channel', 'recipient', 'is_sent', 'created_at']
+    list_filter = ['alert_type', 'severity', 'channel', 'is_sent', 'created_at']
+    search_fields = ['title', 'message', 'recipient']
+    readonly_fields = ['created_at', 'sent_at']
+
+
+@admin.register(ClimateSchedule)
+class ClimateScheduleAdmin(admin.ModelAdmin):
+    list_display = ['id', 'name', 'facility', 'start_time', 'end_time', 'action', 'is_active']
+    list_filter = ['action', 'is_active', 'facility']
+    search_fields = ['name', 'facility__name']
+
+
+@admin.register(EnergyReport)
+class EnergyReportAdmin(admin.ModelAdmin):
+    list_display = ['id', 'facility', 'report_type', 'start_date', 'end_date', 'total_energy_kwh', 'total_cost', 'efficiency_score']
+    list_filter = ['report_type', 'generated_at', 'facility']
+    search_fields = ['facility__name']
+    readonly_fields = ['generated_at']
+
+
+@admin.register(WastePrediction)
+class WastePredictionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'waste_bin', 'prediction_date', 'predicted_fill_level', 'confidence', 'will_be_full']
+    list_filter = ['will_be_full', 'prediction_date', 'created_at']
+    search_fields = ['waste_bin__address']
+    readonly_fields = ['created_at']
+
+
+@admin.register(MaintenanceSchedule)
+class MaintenanceScheduleAdmin(admin.ModelAdmin):
+    list_display = ['id', 'facility', 'boiler', 'scheduled_date', 'status', 'assigned_technician']
+    list_filter = ['status', 'scheduled_date', 'facility']
+    search_fields = ['facility__name', 'assigned_technician', 'task_description']
+
+
+@admin.register(DriverPerformance)
+class DriverPerformanceAdmin(admin.ModelAdmin):
+    list_display = ['id', 'truck', 'date', 'bins_collected', 'total_distance', 'rating']
+    list_filter = ['date', 'truck']
+    search_fields = ['truck__driver_name']

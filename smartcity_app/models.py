@@ -551,3 +551,260 @@ class UtilityNode(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.type}"
+
+
+# ==================== NEW MODELS FOR ENHANCED FUNCTIONALITY ====================
+
+class WasteTask(models.Model):
+    """
+    Task assignment for waste collection
+    """
+    TASK_STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('ASSIGNED', 'Assigned'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('COMPLETED', 'Completed'),
+        ('REJECTED', 'Rejected'),
+        ('TIMEOUT', 'Timeout'),
+    ]
+    PRIORITY_CHOICES = [
+        ('LOW', 'Low'),
+        ('MEDIUM', 'Medium'),
+        ('HIGH', 'High'),
+        ('URGENT', 'Urgent'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    waste_bin = models.ForeignKey(WasteBin, on_delete=models.CASCADE, related_name='tasks')
+    assigned_truck = models.ForeignKey(Truck, on_delete=models.SET_NULL, null=True, blank=True, related_name='tasks')
+    status = models.CharField(max_length=20, choices=TASK_STATUS_CHOICES, default='PENDING')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='MEDIUM')
+    created_at = models.DateTimeField(auto_now_add=True)
+    assigned_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True, null=True)
+    estimated_duration = models.IntegerField(default=30, help_text="Estimated duration in minutes")
+    actual_duration = models.IntegerField(null=True, blank=True, help_text="Actual duration in minutes")
+    
+    def __str__(self):
+        return f"Task {self.id} - {self.status}"
+    
+    class Meta:
+        ordering = ['-created_at']
+
+
+class RouteOptimization(models.Model):
+    """
+    Optimized routes for waste collection trucks
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    truck = models.ForeignKey(Truck, on_delete=models.CASCADE, related_name='routes')
+    waypoints = models.JSONField(help_text="List of bin IDs in optimal order")
+    total_distance = models.FloatField(help_text="Total distance in kilometers")
+    estimated_time = models.IntegerField(help_text="Estimated time in minutes")
+    fuel_estimate = models.FloatField(help_text="Estimated fuel consumption in liters")
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    def __str__(self):
+        return f"Route for {self.truck.driver_name} - {self.created_at.strftime('%Y-%m-%d')}"
+    
+    class Meta:
+        ordering = ['-created_at']
+
+
+class AlertNotification(models.Model):
+    """
+    Smart alert system for critical events
+    """
+    ALERT_TYPE_CHOICES = [
+        ('WASTE_BIN_FULL', 'Waste Bin Full'),
+        ('TEMPERATURE_CRITICAL', 'Temperature Critical'),
+        ('HUMIDITY_CRITICAL', 'Humidity Critical'),
+        ('DEVICE_OFFLINE', 'Device Offline'),
+        ('TASK_TIMEOUT', 'Task Timeout'),
+        ('FUEL_LOW', 'Fuel Low'),
+        ('MAINTENANCE_DUE', 'Maintenance Due'),
+        ('ENERGY_SPIKE', 'Energy Spike'),
+    ]
+    CHANNEL_CHOICES = [
+        ('APP', 'In-App'),
+        ('SMS', 'SMS'),
+        ('EMAIL', 'Email'),
+        ('TELEGRAM', 'Telegram'),
+        ('PUSH', 'Push Notification'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    alert_type = models.CharField(max_length=30, choices=ALERT_TYPE_CHOICES)
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    severity = models.CharField(max_length=20, choices=[('INFO', 'Info'), ('WARNING', 'Warning'), ('CRITICAL', 'Critical')], default='INFO')
+    channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default='APP')
+    recipient = models.CharField(max_length=255, help_text="Phone number, email, or user ID")
+    is_sent = models.BooleanField(default=False)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    related_waste_bin = models.ForeignKey(WasteBin, on_delete=models.CASCADE, null=True, blank=True, related_name='alerts')
+    related_facility = models.ForeignKey(Facility, on_delete=models.CASCADE, null=True, blank=True, related_name='alerts')
+    related_truck = models.ForeignKey(Truck, on_delete=models.CASCADE, null=True, blank=True, related_name='alerts')
+    
+    def __str__(self):
+        return f"{self.alert_type} - {self.severity} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+    
+    class Meta:
+        ordering = ['-created_at']
+
+
+class ClimateSchedule(models.Model):
+    """
+    Automated climate control schedules for facilities
+    """
+    DAY_CHOICES = [
+        ('MON', 'Monday'),
+        ('TUE', 'Tuesday'),
+        ('WED', 'Wednesday'),
+        ('THU', 'Thursday'),
+        ('FRI', 'Friday'),
+        ('SAT', 'Saturday'),
+        ('SUN', 'Sunday'),
+    ]
+    ACTION_CHOICES = [
+        ('INCREASE_TEMP', 'Increase Temperature'),
+        ('DECREASE_TEMP', 'Decrease Temperature'),
+        ('MAINTAIN_TEMP', 'Maintain Temperature'),
+        ('INCREASE_HUMIDITY', 'Increase Humidity'),
+        ('DECREASE_HUMIDITY', 'Decrease Humidity'),
+        ('SHUTDOWN', 'Shutdown'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    facility = models.ForeignKey(Facility, on_delete=models.CASCADE, related_name='schedules')
+    boiler = models.ForeignKey(Boiler, on_delete=models.CASCADE, null=True, blank=True, related_name='schedules')
+    name = models.CharField(max_length=255, help_text="Schedule name")
+    days_of_week = models.JSONField(help_text="List of active days ['MON', 'TUE', ...]")
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    target_temperature = models.FloatField(null=True, blank=True)
+    target_humidity = models.FloatField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.name} - {self.facility.name}"
+    
+    class Meta:
+        ordering = ['start_time']
+
+
+class EnergyReport(models.Model):
+    """
+    Energy consumption and cost analysis reports
+    """
+    REPORT_TYPE_CHOICES = [
+        ('DAILY', 'Daily'),
+        ('WEEKLY', 'Weekly'),
+        ('MONTHLY', 'Monthly'),
+        ('YEARLY', 'Yearly'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    facility = models.ForeignKey(Facility, on_delete=models.CASCADE, related_name='energy_reports')
+    report_type = models.CharField(max_length=20, choices=REPORT_TYPE_CHOICES)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    total_energy_kwh = models.FloatField(help_text="Total energy consumed in kWh")
+    total_cost = models.FloatField(help_text="Total cost in local currency")
+    average_temperature = models.FloatField()
+    average_humidity = models.FloatField()
+    efficiency_score = models.FloatField(help_text="0-100 score")
+    cost_savings = models.FloatField(default=0, help_text="Savings compared to previous period")
+    recommendations = models.TextField(blank=True)
+    generated_at = models.DateTimeField(auto_now_add=True)
+    generated_by = models.CharField(max_length=100, default='SYSTEM')
+    
+    def __str__(self):
+        return f"{self.facility.name} - {self.report_type} - {self.start_date}"
+    
+    class Meta:
+        ordering = ['-generated_at']
+
+
+class WastePrediction(models.Model):
+    """
+    AI-based predictions for waste bin fill levels
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    waste_bin = models.ForeignKey(WasteBin, on_delete=models.CASCADE, related_name='predictions')
+    prediction_date = models.DateField()
+    predicted_fill_level = models.IntegerField(help_text="Predicted fill level 0-100")
+    confidence = models.FloatField(help_text="Prediction confidence 0-100")
+    will_be_full = models.BooleanField(default=False)
+    recommended_collection_date = models.DateField(null=True, blank=True)
+    based_on_data_points = models.IntegerField(help_text="Number of historical data points used")
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"Prediction for {self.waste_bin.address} on {self.prediction_date}"
+    
+    class Meta:
+        ordering = ['-prediction_date']
+
+
+class MaintenanceSchedule(models.Model):
+    """
+    Maintenance schedule for facilities and equipment
+    """
+    STATUS_CHOICES = [
+        ('SCHEDULED', 'Scheduled'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('COMPLETED', 'Completed'),
+        ('CANCELLED', 'Cancelled'),
+        ('OVERDUE', 'Overdue'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    facility = models.ForeignKey(Facility, on_delete=models.CASCADE, related_name='maintenance_schedules')
+    boiler = models.ForeignKey(Boiler, on_delete=models.SET_NULL, null=True, blank=True, related_name='maintenance_schedules')
+    scheduled_date = models.DateField()
+    completion_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='SCHEDULED')
+    task_description = models.TextField()
+    assigned_technician = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    estimated_cost = models.FloatField(null=True, blank=True)
+    actual_cost = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"Maintenance: {self.facility.name} - {self.scheduled_date}"
+    
+    class Meta:
+        ordering = ['scheduled_date']
+
+
+class DriverPerformance(models.Model):
+    """
+    Track driver performance metrics
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    truck = models.ForeignKey(Truck, on_delete=models.CASCADE, related_name='performance_records')
+    date = models.DateField()
+    bins_collected = models.IntegerField(default=0)
+    total_distance = models.FloatField(default=0, help_text="km")
+    total_time = models.IntegerField(default=0, help_text="minutes")
+    fuel_used = models.FloatField(default=0, help_text="liters")
+    tasks_completed = models.IntegerField(default=0)
+    tasks_rejected = models.IntegerField(default=0)
+    average_response_time = models.IntegerField(default=0, help_text="Average time to accept task in seconds")
+    rating = models.FloatField(default=5.0, help_text="Performance rating 1-5")
+    
+    def __str__(self):
+        return f"{self.truck.driver_name} - {self.date}"
+    
+    class Meta:
+        ordering = ['-date']
+        unique_together = ['truck', 'date']

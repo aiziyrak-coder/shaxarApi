@@ -132,4 +132,32 @@ urlpatterns = [
     
     # Waste bin analysis
     path('waste-bins/analyze/', views.trigger_waste_bin_analysis, name='trigger-waste-bin-analysis'),
+    
+    # ==================== NEW ENDPOINTS FOR ENHANCED FUNCTIONALITY ====================
+    
+    # Waste Task Management
+    path('waste-tasks/', views.WasteTaskListCreateView.as_view(), name='waste-task-list-create'),
+    path('waste-tasks/<str:pk>/', views.WasteTaskDetailView.as_view(), name='waste-task-detail'),
+    path('waste-tasks/auto-assign/', views.auto_assign_task, name='auto-assign-task'),
+    
+    # Route Optimization
+    path('routes/optimize/', views.RouteOptimizationView.as_view(), name='route-optimization'),
+    
+    # Alert Notifications
+    path('alerts/', views.AlertNotificationListCreateView.as_view(), name='alert-list-create'),
+    
+    # Climate Schedules
+    path('climate-schedules/', views.ClimateScheduleListCreateView.as_view(), name='climate-schedule-list-create'),
+    path('climate-schedules/<str:pk>/', views.ClimateScheduleDetailView.as_view(), name='climate-schedule-detail'),
+    
+    # Reports and Analytics
+    path('reports/energy/generate/', views.generate_energy_report, name='generate-energy-report'),
+    path('reports/waste/statistics/', views.get_waste_statistics, name='waste-statistics'),
+    path('reports/climate/statistics/', views.get_climate_statistics, name='climate-statistics'),
+    
+    # Predictions
+    path('predictions/waste/', views.generate_waste_prediction, name='generate-waste-prediction'),
+    
+    # Driver Performance
+    path('drivers/<str:truck_id>/performance/', views.get_driver_performance, name='driver-performance'),
 ]

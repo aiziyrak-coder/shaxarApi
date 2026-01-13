@@ -208,7 +208,42 @@ class WasteBinListCreateView(APIView):
         serializer = WasteBinSerializer(data=data, context={'request': request})
         
         if serializer.is_valid():
-            serializer.save()
+            waste_bin = serializer.save()
+            
+            # AUTO-GENERATE QR CODE
+            try:
+                import qrcode
+                import os
+                from django.conf import settings
+                
+                # Create QR codes directory
+                qr_codes_dir = os.path.join(settings.MEDIA_ROOT, 'qr_codes')
+                os.makedirs(qr_codes_dir, exist_ok=True)
+                
+                # QR code data - Telegram bot link with bin ID
+                qr_data = f"https://t.me/tozafargonabot?start={waste_bin.id}"
+                
+                # Generate QR code
+                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr.add_data(qr_data)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                
+                # Save QR code
+                qr_filename = f"bin_{waste_bin.id}_qr.png"
+                qr_path = os.path.join(qr_codes_dir, qr_filename)
+                img.save(qr_path)
+                
+                # Update bin with QR code URL (always use production domain)
+                waste_bin.qr_code_url = f"https://ferganaapi.cdcgroup.uz/media/qr_codes/{qr_filename}"
+                waste_bin.save()
+                
+                print(f"✅ QR code yaratildi: {waste_bin.qr_code_url}")
+            except Exception as e:
+                print(f"⚠️ QR code yaratishda xato: {e}")
+            
+            # Return updated data with QR code
+            serializer = WasteBinSerializer(waste_bin)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         
         # Xatolik bo'lsa nima xatoligini ko'rsatish

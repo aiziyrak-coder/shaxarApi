@@ -916,15 +916,9 @@ class FacilityDetailView(APIView):
 
 class AirSensorListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only sensors belonging to their organization
-            sensors = AirSensor.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all sensors
-            sensors = AirSensor.objects.all()
+        # AirSensor model doesn't have organization field, so return all sensors
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        sensors = AirSensor.objects.all()
         
         serializer = AirSensorSerializer(sensors, many=True)
         return Response(serializer.data)
@@ -966,15 +960,9 @@ class AirSensorDetailView(APIView):
 
 class SOSColumnListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only columns belonging to their organization
-            columns = SOSColumn.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all columns
-            columns = SOSColumn.objects.all()
+        # SOSColumn model doesn't have organization field, so return all columns
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        columns = SOSColumn.objects.all()
         
         serializer = SOSColumnSerializer(columns, many=True)
         return Response(serializer.data)
@@ -1016,15 +1004,9 @@ class SOSColumnDetailView(APIView):
 
 class EcoViolationListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only violations belonging to their organization
-            violations = EcoViolation.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all violations
-            violations = EcoViolation.objects.all()
+        # EcoViolation model doesn't have organization field, so return all violations
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        violations = EcoViolation.objects.all()
         
         serializer = EcoViolationSerializer(violations, many=True)
         return Response(serializer.data)
@@ -1066,15 +1048,9 @@ class EcoViolationDetailView(APIView):
 
 class ConstructionSiteListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only sites belonging to their organization
-            sites = ConstructionSite.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all sites
-            sites = ConstructionSite.objects.all()
+        # ConstructionSite model doesn't have organization field, so return all sites
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        sites = ConstructionSite.objects.all()
         
         serializer = ConstructionSiteSerializer(sites, many=True)
         return Response(serializer.data)
@@ -1116,15 +1092,9 @@ class ConstructionSiteDetailView(APIView):
 
 class LightPoleListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only poles belonging to their organization
-            poles = LightPole.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all poles
-            poles = LightPole.objects.all()
+        # LightPole model doesn't have organization field, so return all poles
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        poles = LightPole.objects.all()
         
         serializer = LightPoleSerializer(poles, many=True)
         return Response(serializer.data)
@@ -1166,15 +1136,9 @@ class LightPoleDetailView(APIView):
 
 class BusListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only buses belonging to their organization
-            buses = Bus.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all buses
-            buses = Bus.objects.all()
+        # Bus model doesn't have organization field, so return all buses
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        buses = Bus.objects.all()
         
         serializer = BusSerializer(buses, many=True)
         return Response(serializer.data)
@@ -1720,15 +1684,9 @@ class ReportEntryDetailView(APIView):
 
 class UtilityNodeListCreateView(APIView):
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only nodes belonging to their organization
-            nodes = UtilityNode.objects.filter(organization_id=org_id)
-        else:
-            # For superadmin, return all nodes
-            nodes = UtilityNode.objects.all()
+        # UtilityNode model doesn't have organization field, so return all nodes
+        # In the future, if organization support is needed, add organization ForeignKey to the model
+        nodes = UtilityNode.objects.all()
         
         serializer = UtilityNodeSerializer(nodes, many=True)
         return Response(serializer.data)
@@ -2209,18 +2167,12 @@ def link_iot_device_to_room(request):
 # IoT Device Views
 @method_decorator(csrf_exempt, name='dispatch')
 class IoTDeviceListCreateView(APIView):
+    permission_classes = []  # Allow unauthenticated access for IoT devices
+    
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only devices belonging to their organization
-            # Since IoT devices are linked to rooms or boilers which are linked to facilities
-            # we'll return all IoT devices but with optimized queries
-            devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all().distinct()
-        else:
-            # For superadmin, return all devices
-            devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all().distinct()
+        # IoTDevice model doesn't have organization field, so return all devices
+        # IoT devices are linked to rooms or boilers which are linked to facilities
+        devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all().distinct()
         
         # Remove duplicates by ID
         unique_devices = {}

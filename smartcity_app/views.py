@@ -220,31 +220,41 @@ class WasteBinListCreateView(APIView):
             # For superadmin, return all bins
             bins = WasteBin.objects.all().select_related('location', 'organization').distinct()
         
-        # CRITICAL: Remove duplicates by ID AND by address/location to prevent frontend showing duplicates
+        # CRITICAL: Remove duplicates by ID first, then by address
         # This ensures that even if database has duplicates, API returns unique bins
         unique_bins_by_id = {}
         unique_bins_by_address = {}
         
         for bin in bins:
-            # First, deduplicate by ID (primary key)
+            # First, deduplicate by ID (primary key) - always keep unique IDs
             if bin.id not in unique_bins_by_id:
                 unique_bins_by_id[bin.id] = bin
                 
-                # Also deduplicate by address to catch duplicates with different IDs but same address
-                if bin.address:
+                # Also track by address to catch duplicates with different IDs but same address
+                # Only if address is provided and not empty
+                if bin.address and bin.address.strip():
                     address_key = bin.address.strip().lower()
                     if address_key not in unique_bins_by_address:
                         unique_bins_by_address[address_key] = bin
                     else:
-                        # If we already have a bin with this address, keep the one with the most recent data
+                        # If we already have a bin with this exact address, keep the one with better data
                         existing_bin = unique_bins_by_address[address_key]
                         # Prefer bin with more complete data (has image_url, lastAnalysis, etc.)
-                        if (bin.image_url or bin.lastAnalysis) and not (existing_bin.image_url or existing_bin.lastAnalysis):
+                        new_bin_has_data = bin.image_url or bin.last_analysis or bin.fill_level is not None
+                        existing_has_data = existing_bin.image_url or existing_bin.last_analysis or existing_bin.fill_level is not None
+                        
+                        if new_bin_has_data and not existing_has_data:
+                            # New bin has data, existing doesn't - replace
                             unique_bins_by_address[address_key] = bin
                             unique_bins_by_id[bin.id] = bin
-                        elif bin.id not in unique_bins_by_id:
-                            # If new bin doesn't have better data, skip it
-                            continue
+                            # Remove old bin if it has different ID
+                            if existing_bin.id != bin.id:
+                                unique_bins_by_id.pop(existing_bin.id, None)
+                        elif existing_bin.id == bin.id:
+                            # Same ID, just update
+                            unique_bins_by_id[bin.id] = bin
+                            unique_bins_by_address[address_key] = bin
+                        # Otherwise, keep existing bin (don't add duplicate by address)
         
         # Convert back to list (use ID-based deduplication as primary)
         unique_bins_list = list(unique_bins_by_id.values())

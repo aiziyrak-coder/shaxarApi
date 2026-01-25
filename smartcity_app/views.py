@@ -220,15 +220,34 @@ class WasteBinListCreateView(APIView):
             # For superadmin, return all bins
             bins = WasteBin.objects.all().select_related('location', 'organization').distinct()
         
-        # CRITICAL: Remove duplicates by ID to prevent frontend showing duplicates
+        # CRITICAL: Remove duplicates by ID AND by address/location to prevent frontend showing duplicates
         # This ensures that even if database has duplicates, API returns unique bins
-        unique_bins = {}
-        for bin in bins:
-            if bin.id not in unique_bins:
-                unique_bins[bin.id] = bin
+        unique_bins_by_id = {}
+        unique_bins_by_address = {}
         
-        # Convert back to list
-        unique_bins_list = list(unique_bins.values())
+        for bin in bins:
+            # First, deduplicate by ID (primary key)
+            if bin.id not in unique_bins_by_id:
+                unique_bins_by_id[bin.id] = bin
+                
+                # Also deduplicate by address to catch duplicates with different IDs but same address
+                if bin.address:
+                    address_key = bin.address.strip().lower()
+                    if address_key not in unique_bins_by_address:
+                        unique_bins_by_address[address_key] = bin
+                    else:
+                        # If we already have a bin with this address, keep the one with the most recent data
+                        existing_bin = unique_bins_by_address[address_key]
+                        # Prefer bin with more complete data (has image_url, lastAnalysis, etc.)
+                        if (bin.image_url or bin.lastAnalysis) and not (existing_bin.image_url or existing_bin.lastAnalysis):
+                            unique_bins_by_address[address_key] = bin
+                            unique_bins_by_id[bin.id] = bin
+                        elif bin.id not in unique_bins_by_id:
+                            # If new bin doesn't have better data, skip it
+                            continue
+        
+        # Convert back to list (use ID-based deduplication as primary)
+        unique_bins_list = list(unique_bins_by_id.values())
         
         # Log if duplicates were found
         if len(bins) != len(unique_bins_list):

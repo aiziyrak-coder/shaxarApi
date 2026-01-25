@@ -213,35 +213,42 @@ class WasteBinListCreateView(APIView):
     permission_classes = []  # Allow unauthenticated access for GET requests (frontend uses token)
     
     def get(self, request):
-        # Get the user's organization if available
-        org_id = request.session.get('organization_id')
-        
-        if org_id:
-            # For organization users, return only bins belonging to their organization
-            bins = WasteBin.objects.filter(organization_id=org_id).select_related('location', 'organization').distinct()
-        else:
-            # For superadmin, return all bins
-            bins = WasteBin.objects.all().select_related('location', 'organization').distinct()
-        
-        # CRITICAL: Remove duplicates by ID only
-        # Address-based deduplication is too aggressive and removes valid bins
-        # If there are truly duplicate bins in database, they should be cleaned using management command
-        unique_bins_by_id = {}
-        
-        for bin in bins:
-            # Deduplicate by ID (primary key) - always keep unique IDs
-            # If same ID appears multiple times, keep the last one (most recent)
-            unique_bins_by_id[bin.id] = bin
-        
-        # Convert back to list
-        unique_bins_list = list(unique_bins_by_id.values())
-        
-        # Log if duplicates were found
-        if len(bins) != len(unique_bins_list):
-            logger.warning(f"⚠️ Duplicate bins detected in database: {len(bins)} total, {len(unique_bins_list)} unique. Removed {len(bins) - len(unique_bins_list)} duplicates.")
-        
-        serializer = WasteBinSerializer(unique_bins_list, many=True, context={'request': request})
-        return Response(serializer.data)
+        try:
+            # Get the user's organization if available
+            org_id = request.session.get('organization_id')
+            
+            if org_id:
+                # For organization users, return only bins belonging to their organization
+                bins = WasteBin.objects.filter(organization_id=org_id).select_related('location', 'organization').distinct()
+            else:
+                # For superadmin, return all bins
+                bins = WasteBin.objects.all().select_related('location', 'organization').distinct()
+            
+            # CRITICAL: Remove duplicates by ID only
+            # Address-based deduplication is too aggressive and removes valid bins
+            # If there are truly duplicate bins in database, they should be cleaned using management command
+            unique_bins_by_id = {}
+            
+            for bin in bins:
+                # Deduplicate by ID (primary key) - always keep unique IDs
+                # If same ID appears multiple times, keep the last one (most recent)
+                unique_bins_by_id[bin.id] = bin
+            
+            # Convert back to list
+            unique_bins_list = list(unique_bins_by_id.values())
+            
+            # Log if duplicates were found
+            if len(bins) != len(unique_bins_list):
+                logger.warning(f"⚠️ Duplicate bins detected in database: {len(bins)} total, {len(unique_bins_list)} unique. Removed {len(bins) - len(unique_bins_list)} duplicates.")
+            
+            serializer = WasteBinSerializer(unique_bins_list, many=True, context={'request': request})
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"❌ Error in WasteBinListCreateView.get: {str(e)}", exc_info=True)
+            return Response({
+                'error': 'Failed to retrieve waste bins',
+                'detail': str(e) if settings.DEBUG else 'Internal server error'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def post(self, request):
         # 1. 'data'ni har doim requestdan nusxalab olamiz (IF dan tashqarida)

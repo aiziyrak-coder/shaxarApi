@@ -14,6 +14,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.authtoken.models import Token
+import logging
+from django.conf import settings
+
+# Configure logging for this module
+logger = logging.getLogger(__name__)
 from .models import (
     Organization, WasteBin, Truck, MoistureSensor, Facility, AirSensor, 
     SOSColumn, EcoViolation, ConstructionSite, LightPole, Bus, CallRequest,
@@ -162,25 +167,44 @@ def login_view(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([])  # Allow unauthenticated users to validate tokens
 def validate_token(request):
     """
     Validate if the token is still valid
+    Supports both GET (with Authorization header) and POST (with token in body)
     """
-    # Check if the user is authenticated (token is valid)
+    # Try to get token from Authorization header first
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    token = None
+    
+    if auth_header.startswith('Token '):
+        token_key = auth_header.split('Token ')[1]
+        try:
+            from rest_framework.authtoken.models import Token
+            token_obj = Token.objects.get(key=token_key)
+            user = token_obj.user
+            # User is authenticated via token
+            response_data = {'valid': True, 'user_id': str(user.id), 'username': user.username}
+            
+            # Include organization ID if it exists in session
+            org_id = request.session.get('organization_id')
+            if org_id:
+                response_data['organization_id'] = org_id
+            
+            return Response(response_data)
+        except Token.DoesNotExist:
+            return Response({'valid': False, 'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
+    
+    # Fallback: Check if user is authenticated via session
     if request.user.is_authenticated:
-        # Return validation result with any stored session data
         response_data = {'valid': True}
-        
-        # Include organization ID if it exists in session
         org_id = request.session.get('organization_id')
         if org_id:
             response_data['organization_id'] = org_id
-        
         return Response(response_data)
     else:
-        return Response({'valid': False}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({'valid': False, 'error': 'No valid authentication'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 # Class-based views for all models
@@ -191,66 +215,121 @@ class WasteBinListCreateView(APIView):
         
         if org_id:
             # For organization users, return only bins belonging to their organization
-            bins = WasteBin.objects.filter(organization_id=org_id).select_related('location', 'organization')
+            bins = WasteBin.objects.filter(organization_id=org_id).select_related('location', 'organization').distinct()
         else:
             # For superadmin, return all bins
-            bins = WasteBin.objects.all().select_related('location', 'organization')
+            bins = WasteBin.objects.all().select_related('location', 'organization').distinct()
         
-        serializer = WasteBinSerializer(bins, many=True, context={'request': request})
+        # CRITICAL: Remove duplicates by ID to prevent frontend showing duplicates
+        # This ensures that even if database has duplicates, API returns unique bins
+        unique_bins = {}
+        for bin in bins:
+            if bin.id not in unique_bins:
+                unique_bins[bin.id] = bin
+        
+        # Convert back to list
+        unique_bins_list = list(unique_bins.values())
+        
+        # Log if duplicates were found
+        if len(bins) != len(unique_bins_list):
+            logger.warning(f"⚠️ Duplicate bins detected in database: {len(bins)} total, {len(unique_bins_list)} unique. Removed {len(bins) - len(unique_bins_list)} duplicates.")
+        
+        serializer = WasteBinSerializer(unique_bins_list, many=True, context={'request': request})
         return Response(serializer.data)
     
     def post(self, request):
-    # 1. 'data'ni har doim requestdan nusxalab olamiz (IF dan tashqarida)
+        # 1. 'data'ni har doim requestdan nusxalab olamiz (IF dan tashqarida)
         data = request.data.copy()
         
         # 2. Org_id bo'lsa, uni ma'lumotlarga qo'shamiz
         org_id = request.session.get('organization_id')
         if org_id:
             data['organization'] = org_id
+        
+        # CRITICAL: Check for duplicate bins by address or location before creating
+        address = data.get('address')
+        location_data = data.get('location')
+        
+        if address and location_data:
+            lat = location_data.get('lat')
+            lng = location_data.get('lng')
+            
+            # Check for existing bin with same address
+            existing_by_address = WasteBin.objects.filter(address=address, organization_id=org_id).first()
+            if existing_by_address:
+                logger.warning(f"⚠️ Duplicate bin detected by address: {address}. Returning existing bin.")
+                serializer = WasteBinSerializer(existing_by_address, context={'request': request})
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            
+            # Check for existing bin with same location (within 0.0001 degrees ~11 meters)
+            if lat and lng:
+                from django.db.models import Q
+                existing_by_location = WasteBin.objects.filter(
+                    Q(location__lat__gte=lat-0.0001) & Q(location__lat__lte=lat+0.0001) &
+                    Q(location__lng__gte=lng-0.0001) & Q(location__lng__lte=lng+0.0001),
+                    organization_id=org_id
+                ).first()
+                if existing_by_location:
+                    logger.warning(f"⚠️ Duplicate bin detected by location: ({lat}, {lng}). Returning existing bin.")
+                    serializer = WasteBinSerializer(existing_by_location, context={'request': request})
+                    return Response(serializer.data, status=status.HTTP_200_OK)
             
         # Endi 'data' har qanday holatda ham mavjud
         serializer = WasteBinSerializer(data=data, context={'request': request})
         
         if serializer.is_valid():
-            waste_bin = serializer.save()
+            # Use database transaction to ensure data consistency
+            from django.db import transaction
             
-            # AUTO-GENERATE QR CODE
             try:
-                import qrcode
-                import os
-                from django.conf import settings
-                
-                # Create QR codes directory
-                qr_codes_dir = os.path.join(settings.MEDIA_ROOT, 'qr_codes')
-                os.makedirs(qr_codes_dir, exist_ok=True)
-                
-                # QR code data - Telegram bot link with bin ID
-                qr_data = f"https://t.me/tozafargonabot?start={waste_bin.id}"
-                
-                # Generate QR code
-                qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                qr.add_data(qr_data)
-                qr.make(fit=True)
-                img = qr.make_image(fill_color="black", back_color="white")
-                
-                # Save QR code
-                qr_filename = f"bin_{waste_bin.id}_qr.png"
-                qr_path = os.path.join(qr_codes_dir, qr_filename)
-                img.save(qr_path)
-                
-                # Update bin with QR code URL (always use production domain)
-                waste_bin.qr_code_url = f"https://ferganaapi.cdcgroup.uz/media/qr_codes/{qr_filename}"
-                waste_bin.save()
-                
-                print(f"✅ QR code yaratildi: {waste_bin.qr_code_url}")
+                with transaction.atomic():
+                    waste_bin = serializer.save()
+                    
+                    # AUTO-GENERATE QR CODE
+                    try:
+                        import qrcode
+                        import os
+                        from django.conf import settings
+                        
+                        # Create QR codes directory
+                        qr_codes_dir = os.path.join(settings.MEDIA_ROOT, 'qr_codes')
+                        os.makedirs(qr_codes_dir, exist_ok=True)
+                        
+                        # QR code data - Telegram bot link with bin ID
+                        qr_data = f"https://t.me/tozafargonabot?start={waste_bin.id}"
+                        
+                        # Generate QR code
+                        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                        qr.add_data(qr_data)
+                        qr.make(fit=True)
+                        img = qr.make_image(fill_color="black", back_color="white")
+                        
+                        # Save QR code
+                        qr_filename = f"bin_{waste_bin.id}_qr.png"
+                        qr_path = os.path.join(qr_codes_dir, qr_filename)
+                        img.save(qr_path)
+                        
+                        # Update bin with QR code URL (always use production domain)
+                        waste_bin.qr_code_url = f"https://ferganaapi.cdcgroup.uz/media/qr_codes/{qr_filename}"
+                        waste_bin.save()
+                        
+                        logger.info(f"✅ QR code yaratildi: {waste_bin.qr_code_url}")
+                    except Exception as e:
+                        logger.error(f"⚠️ QR code yaratishda xato: {e}")
+                        # Don't fail the whole request if QR code generation fails
+                    
+                    # Return updated data with QR code
+                    serializer = WasteBinSerializer(waste_bin, context={'request': request})
+                    return Response(serializer.data, status=status.HTTP_201_CREATED)
             except Exception as e:
-                print(f"⚠️ QR code yaratishda xato: {e}")
-            
-            # Return updated data with QR code
-            serializer = WasteBinSerializer(waste_bin)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+                logger.error(f"❌ Error creating waste bin: {str(e)}", exc_info=True)
+                return Response({
+                    'error': 'Failed to create waste bin',
+                    'detail': str(e) if settings.DEBUG else 'Internal server error'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         # Xatolik bo'lsa nima xatoligini ko'rsatish
+        logger.warning(f"⚠️ WasteBin serializer validation failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -392,12 +471,20 @@ class TruckListCreateView(APIView):
         
         if org_id:
             # For organization users, return only trucks belonging to their organization
-            trucks = Truck.objects.filter(organization_id=org_id)
+            trucks = Truck.objects.filter(organization_id=org_id).distinct()
         else:
             # For superadmin, return all trucks
-            trucks = Truck.objects.all()
+            trucks = Truck.objects.all().distinct()
         
-        serializer = TruckSerializer(trucks, many=True, context={'request': request})
+        # Remove duplicates by ID
+        unique_trucks = {}
+        for truck in trucks:
+            if truck.id not in unique_trucks:
+                unique_trucks[truck.id] = truck
+        
+        unique_trucks_list = list(unique_trucks.values())
+        
+        serializer = TruckSerializer(unique_trucks_list, many=True, context={'request': request})
         return Response(serializer.data)
     
     def post(self, request):
@@ -694,8 +781,17 @@ class MoistureSensorDetailView(APIView):
 
 class RoomListCreateView(APIView):
     def get(self, request):
-        rooms = Room.objects.all()
-        serializer = RoomSerializer(rooms, many=True)
+        rooms = Room.objects.all().distinct()
+        
+        # Remove duplicates by ID
+        unique_rooms = {}
+        for room in rooms:
+            if room.id not in unique_rooms:
+                unique_rooms[room.id] = room
+        
+        unique_rooms_list = list(unique_rooms.values())
+        
+        serializer = RoomSerializer(unique_rooms_list, many=True)
         return Response(serializer.data)
     
     def post(self, request):
@@ -728,8 +824,17 @@ class RoomDetailView(APIView):
 
 class BoilerListCreateView(APIView):
     def get(self, request):
-        boilers = Boiler.objects.all()
-        serializer = BoilerSerializer(boilers, many=True)
+        boilers = Boiler.objects.all().distinct()
+        
+        # Remove duplicates by ID
+        unique_boilers = {}
+        for boiler in boilers:
+            if boiler.id not in unique_boilers:
+                unique_boilers[boiler.id] = boiler
+        
+        unique_boilers_list = list(unique_boilers.values())
+        
+        serializer = BoilerSerializer(unique_boilers_list, many=True)
         return Response(serializer.data)
     
     def post(self, request):
@@ -765,8 +870,17 @@ class FacilityListCreateView(APIView):
         from django.db.models import Prefetch
         # Prefetch boilers and their connected rooms for efficient querying
         boilers_prefetch = Prefetch('boilers', Boiler.objects.prefetch_related('connected_rooms', 'device_health'))
-        facilities = Facility.objects.prefetch_related(boilers_prefetch).all()
-        serializer = FacilitySerializer(facilities, many=True)
+        facilities = Facility.objects.prefetch_related(boilers_prefetch).all().distinct()
+        
+        # Remove duplicates by ID
+        unique_facilities = {}
+        for facility in facilities:
+            if facility.id not in unique_facilities:
+                unique_facilities[facility.id] = facility
+        
+        unique_facilities_list = list(unique_facilities.values())
+        
+        serializer = FacilitySerializer(unique_facilities_list, many=True)
         return Response(serializer.data)
     
     def post(self, request):
@@ -1854,6 +1968,10 @@ def update_iot_sensor_data(request):
     API endpoint to update IoT sensor data (temperature and humidity) from ESP devices
     """
     try:
+        # Log incoming request for debugging
+        logger.info(f"📡 IoT sensor data received: {request.data}")
+        logger.info(f"📡 Request from IP: {request.META.get('REMOTE_ADDR', 'Unknown')}")
+        
         device_id = request.data.get('device_id')
         temperature = request.data.get('temperature')
         humidity = request.data.get('humidity')
@@ -1861,44 +1979,99 @@ def update_iot_sensor_data(request):
         timestamp = request.data.get('timestamp', int(timezone.now().timestamp()))
         
         if not device_id:
+            logger.error("❌ device_id is missing in request")
             return Response({'error': 'device_id is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Find the IoT device by device_id
+        # Find the IoT device by device_id (case-insensitive search)
         try:
-            iot_device = IoTDevice.objects.get(device_id=device_id)
+            # Try exact match first
+            try:
+                iot_device = IoTDevice.objects.get(device_id=device_id)
+            except IoTDevice.DoesNotExist:
+                # Try case-insensitive search
+                iot_device = IoTDevice.objects.filter(device_id__iexact=device_id).first()
+                if not iot_device:
+                    raise IoTDevice.DoesNotExist
+            
+            logger.info(f"✅ Found IoT device: {device_id} (actual: {iot_device.device_id})")
         except IoTDevice.DoesNotExist:
-            return Response({'error': f'Device with ID {device_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+            logger.error(f"❌ Device with ID {device_id} not found in database")
+            # List available devices for debugging
+            available_devices = list(IoTDevice.objects.values_list('device_id', flat=True))
+            logger.info(f"📋 Available devices ({len(available_devices)} total): {available_devices}")
+            return Response({
+                'error': f'Device with ID "{device_id}" not found',
+                'available_devices': available_devices,
+                'hint': 'Check device_id spelling and case sensitivity'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Validate temperature and humidity ranges
+        if temperature is not None:
+            if not isinstance(temperature, (int, float)):
+                try:
+                    temperature = float(temperature)
+                except (ValueError, TypeError):
+                    logger.error(f"❌ Invalid temperature value: {temperature}")
+                    return Response({'error': 'temperature must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+            # Temperature should be between -50 and 100 degrees Celsius
+            if temperature < -50 or temperature > 100:
+                logger.warning(f"⚠️ Temperature out of normal range: {temperature}°C")
+        
+        if humidity is not None:
+            if not isinstance(humidity, (int, float)):
+                try:
+                    humidity = float(humidity)
+                except (ValueError, TypeError):
+                    logger.error(f"❌ Invalid humidity value: {humidity}")
+                    return Response({'error': 'humidity must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+            # Humidity should be between 0 and 100 percent
+            if humidity < 0 or humidity > 100:
+                logger.warning(f"⚠️ Humidity out of normal range: {humidity}%")
         
         # Update device's last seen time and sensor readings
         iot_device.last_seen = timezone.now()
-        iot_device.current_temperature = temperature
-        iot_device.current_humidity = humidity
+        if temperature is not None:
+            iot_device.current_temperature = temperature
+        if humidity is not None:
+            iot_device.current_humidity = humidity
         iot_device.last_sensor_update = timezone.now()
         iot_device.save()
+        logger.info(f"✅ Updated IoT device {device_id}: temp={temperature}°C, humidity={humidity}%")
         
         # Update associated room or boiler if available
+        updated_entities = []
         if iot_device.room:
-            iot_device.room.temperature = temperature or iot_device.room.temperature
+            if temperature is not None:
+                iot_device.room.temperature = temperature
             if humidity is not None:
                 iot_device.room.humidity = humidity
             iot_device.room.last_updated = timezone.now()
             iot_device.room.save()
+            updated_entities.append(f"Room {iot_device.room.id}")
+            logger.info(f"✅ Updated room {iot_device.room.id}")
         elif iot_device.boiler:
-            iot_device.boiler.temperature = temperature or iot_device.boiler.temperature
+            if temperature is not None:
+                iot_device.boiler.temperature = temperature
             if humidity is not None:
                 iot_device.boiler.humidity = humidity
             iot_device.boiler.last_updated = timezone.now()
             iot_device.boiler.save()
+            updated_entities.append(f"Boiler {iot_device.boiler.id}")
+            logger.info(f"✅ Updated boiler {iot_device.boiler.id}")
+        else:
+            logger.warning(f"⚠️ IoT device {device_id} is not linked to any room or boiler")
         
         return Response({
             'message': 'Sensor data updated successfully',
             'device_id': device_id,
             'temperature': temperature,
             'humidity': humidity,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'updated_entities': updated_entities
         })
         
     except Exception as e:
+        logger.error(f"❌ Error updating IoT sensor data: {str(e)}", exc_info=True)
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1911,8 +2084,6 @@ def link_iot_device_to_boiler(request):
     """
     try:
         # Diagnostic logging
-        import logging
-        logger = logging.getLogger(__name__)
         logger.debug('link_iot_device_to_boiler called with method=%s, user=%s', request.method, str(request.user))
         try:
             headers = {k: v for k, v in request.META.items() if k.startswith('HTTP_')}
@@ -1959,8 +2130,7 @@ def link_iot_device_to_boiler(request):
         })
         
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).exception('Error in link_iot_device_to_boiler')
+        logger.exception('Error in link_iot_device_to_boiler')
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1970,8 +2140,6 @@ def link_iot_device_to_boiler(request):
 @permission_classes([])
 def iot_link_test(request):
     """Simple debug endpoint: echoes back received JSON and headers."""
-    import logging
-    logger = logging.getLogger(__name__)
     logger.debug('iot_link_test method=%s headers=%s data=%s', request.method, {k:v for k,v in request.META.items() if k.startswith('HTTP_')}, request.data)
     return Response({'ok': True, 'method': request.method, 'data': request.data})
 
@@ -1987,8 +2155,6 @@ def link_iot_device_to_room(request):
     """
     try:
         # Diagnostic logging
-        import logging
-        logger = logging.getLogger(__name__)
         logger.debug('link_iot_device_to_room called with method=%s, user=%s', request.method, str(request.user))
         try:
             # Only log a subset of headers to avoid sensitive info
@@ -2036,8 +2202,7 @@ def link_iot_device_to_room(request):
         })
         
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).exception('Error in link_iot_device_to_room')
+        logger.exception('Error in link_iot_device_to_room')
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -2052,12 +2217,20 @@ class IoTDeviceListCreateView(APIView):
             # For organization users, return only devices belonging to their organization
             # Since IoT devices are linked to rooms or boilers which are linked to facilities
             # we'll return all IoT devices but with optimized queries
-            devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all()
+            devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all().distinct()
         else:
             # For superadmin, return all devices
-            devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all()
+            devices = IoTDevice.objects.select_related('location', 'room', 'boiler').all().distinct()
         
-        serializer = IoTDeviceSerializer(devices, many=True, context={'request': request})
+        # Remove duplicates by ID
+        unique_devices = {}
+        for device in devices:
+            if device.id not in unique_devices:
+                unique_devices[device.id] = device
+        
+        unique_devices_list = list(unique_devices.values())
+        
+        serializer = IoTDeviceSerializer(unique_devices_list, many=True, context={'request': request})
         return Response(serializer.data)
     
     def post(self, request):

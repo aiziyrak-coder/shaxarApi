@@ -208,7 +208,10 @@ def validate_token(request):
 
 
 # Class-based views for all models
+@method_decorator(csrf_exempt, name='dispatch')
 class WasteBinListCreateView(APIView):
+    permission_classes = []  # Allow unauthenticated access for GET requests (frontend uses token)
+    
     def get(self, request):
         # Get the user's organization if available
         org_id = request.session.get('organization_id')

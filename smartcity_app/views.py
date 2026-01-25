@@ -220,43 +220,17 @@ class WasteBinListCreateView(APIView):
             # For superadmin, return all bins
             bins = WasteBin.objects.all().select_related('location', 'organization').distinct()
         
-        # CRITICAL: Remove duplicates by ID first, then by address
-        # This ensures that even if database has duplicates, API returns unique bins
+        # CRITICAL: Remove duplicates by ID only
+        # Address-based deduplication is too aggressive and removes valid bins
+        # If there are truly duplicate bins in database, they should be cleaned using management command
         unique_bins_by_id = {}
-        unique_bins_by_address = {}
         
         for bin in bins:
-            # First, deduplicate by ID (primary key) - always keep unique IDs
-            if bin.id not in unique_bins_by_id:
-                unique_bins_by_id[bin.id] = bin
-                
-                # Also track by address to catch duplicates with different IDs but same address
-                # Only if address is provided and not empty
-                if bin.address and bin.address.strip():
-                    address_key = bin.address.strip().lower()
-                    if address_key not in unique_bins_by_address:
-                        unique_bins_by_address[address_key] = bin
-                    else:
-                        # If we already have a bin with this exact address, keep the one with better data
-                        existing_bin = unique_bins_by_address[address_key]
-                        # Prefer bin with more complete data (has image_url, lastAnalysis, etc.)
-                        new_bin_has_data = bin.image_url or bin.last_analysis or bin.fill_level is not None
-                        existing_has_data = existing_bin.image_url or existing_bin.last_analysis or existing_bin.fill_level is not None
-                        
-                        if new_bin_has_data and not existing_has_data:
-                            # New bin has data, existing doesn't - replace
-                            unique_bins_by_address[address_key] = bin
-                            unique_bins_by_id[bin.id] = bin
-                            # Remove old bin if it has different ID
-                            if existing_bin.id != bin.id:
-                                unique_bins_by_id.pop(existing_bin.id, None)
-                        elif existing_bin.id == bin.id:
-                            # Same ID, just update
-                            unique_bins_by_id[bin.id] = bin
-                            unique_bins_by_address[address_key] = bin
-                        # Otherwise, keep existing bin (don't add duplicate by address)
+            # Deduplicate by ID (primary key) - always keep unique IDs
+            # If same ID appears multiple times, keep the last one (most recent)
+            unique_bins_by_id[bin.id] = bin
         
-        # Convert back to list (use ID-based deduplication as primary)
+        # Convert back to list
         unique_bins_list = list(unique_bins_by_id.values())
         
         # Log if duplicates were found

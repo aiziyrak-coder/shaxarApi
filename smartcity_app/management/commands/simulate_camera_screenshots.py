@@ -45,95 +45,57 @@ class Command(BaseCommand):
             time.sleep(30 * 60)  # Wait 30 minutes
 
     def simulate_screenshots(self):
-        """Simulate camera screenshots for all waste bins with AI analysis"""
+        """Capture REAL camera screenshots for all waste bins with REAL AI analysis - NO simulation"""
         bins = WasteBin.objects.all()
         
         for bin in bins:
-            # Generate a simulated image for the bin
-            image_url = self.generate_simulated_image(bin)
+            # CRITICAL: Only process bins with REAL camera URLs
+            if not bin.camera_url:
+                self.stdout.write(f"⚠️ Bin {bin.id} ({bin.address}) has no camera_url - skipping")
+                continue
             
-            if image_url:
-                # Update bin with the new image and AI analysis
-                ai_analysis = self.analyze_image_with_ai(image_url, bin)
+            # CRITICAL: Skip placeholder URLs
+            if 'placeholder' in bin.camera_url.lower() or 'via.placeholder' in bin.camera_url.lower():
+                self.stdout.write(f"⚠️ Bin {bin.id} ({bin.address}) has placeholder camera URL - skipping")
+                continue
+            
+            try:
+                # Download REAL image from camera URL
+                import requests as req
+                import base64
+                from io import BytesIO
+                from smartcity_app.views import analyze_bin_image_backend
                 
-                # Update bin status based on AI analysis
-                bin.image_url = image_url
-                bin.image_source = 'CCTV'  # Mark as camera captured
-                bin.last_analysis = f"AI tahlili: {ai_analysis.get('notes', 'Tahlil amalga oshirildi')}, Isbot: {ai_analysis.get('isWasteBin')}, IsFull: {ai_analysis.get('isFull')}, Conf: {ai_analysis.get('confidence')}%"
-                
-                # Update fill level and full status based on AI analysis
-                if 'fillLevel' in ai_analysis:
-                    bin.fill_level = ai_analysis['fillLevel']
-                
-                if 'isFull' in ai_analysis:
-                    bin.is_full = ai_analysis['isFull']
-                
-                bin.save()
-                
+                response = req.get(bin.camera_url, timeout=10)
+                if response.status_code == 200:
+                    # Convert image to base64 for REAL AI analysis
+                    image_bytes = BytesIO(response.content).read()
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    
+                    # Call REAL AI analysis (no simulation)
+                    ai_analysis = analyze_bin_image_backend(image_base64)
+                    
+                    # Update bin status based on REAL AI analysis
+                    bin.image_url = bin.camera_url  # Use real camera URL
+                    bin.image_source = 'CCTV'
+                    bin.last_analysis = f"AI tahlili (CCTV): {ai_analysis.get('notes', 'Tahlil amalga oshirildi')}, IsFull: {ai_analysis.get('isFull')}, FillLevel: {ai_analysis.get('fillLevel')}%, Conf: {ai_analysis.get('confidence')}%"
+                    bin.fill_level = ai_analysis.get('fillLevel', bin.fill_level)
+                    bin.is_full = ai_analysis.get('isFull', bin.is_full)
+                    
+                    bin.save()
+                    
+                    self.stdout.write(
+                        f"✅ Bin {bin.id} ({bin.address}) analyzed with REAL camera image: fill level {bin.fill_level}%, "
+                        f"full status: {bin.is_full}, confidence: {ai_analysis.get('confidence')}%"
+                    )
+                else:
+                    self.stdout.write(
+                        f"❌ Bin {bin.id} ({bin.address}) camera URL returned {response.status_code} - cannot capture screenshot"
+                    )
+            except Exception as e:
                 self.stdout.write(
-                    f"Bin {bin.id} updated with camera screenshot: fill level {bin.fill_level}%, "
-                    f"full status: {bin.is_full}, confidence: {ai_analysis.get('confidence')}%"
+                    f"❌ Error capturing screenshot for bin {bin.id} ({bin.address}): {str(e)}"
                 )
 
-    def generate_simulated_image(self, bin):
-        """Generate a simulated image URL for the waste bin"""
-        # In a real system, this would capture an actual image from the camera
-        # For simulation, we'll return a placeholder image URL
-        # This could be a service that generates simulated images based on the bin's status
-        base_url = "https://via.placeholder.com/640x480"
-        color = "red" if bin.fill_level > 80 else "green" if bin.fill_level < 30 else "yellow"
-        return f"{base_url}/000000/{color}.png?text=Waste+Bin+{str(bin.id)[:8]}&fill={bin.fill_level}%"
-
-    def analyze_image_with_ai(self, image_url, bin):
-        """Enhanced AI analysis of waste bin images"""
-        try:
-            # In a real system, this would connect to an AI service like Google's Gemini
-            # For now, we'll simulate the AI analysis based on the bin's current state
-            
-            # Simulate AI analysis based on current fill level
-            current_fill = bin.fill_level
-            is_full = current_fill > 80
-            
-            # Add some randomness to make it more realistic
-            confidence = min(95, max(60, 80 + random.randint(-10, 10)))
-            
-            # Determine if this actually looks like a waste bin
-            is_waste_bin = True  # Assume it's a waste bin since we're analyzing a waste bin object
-            
-            # Adjust fill level based on AI analysis
-            ai_fill_level = current_fill
-            if random.random() < 0.1:  # 10% chance of adjustment
-                adjustment = random.randint(-10, 10)
-                ai_fill_level = max(0, min(100, current_fill + adjustment))
-                is_full = ai_fill_level > 80
-            
-            notes = f"Konteyner {ai_fill_level}% to'la. {'To\'lgan' if is_full else 'To\'lmagan'}"
-            
-            # If the fill level is high, check if it might be overflowing
-            if ai_fill_level > 90 and random.random() < 0.3:
-                notes = "Konteyner toshib ketayotgan. Tez orada yuklash kerak."
-                is_full = True
-                ai_fill_level = 100
-            elif ai_fill_level < 20 and random.random() < 0.2:
-                notes = "Konteyner hali bo'sh. Yana to'lishi kerak."
-            
-            return {
-                'isWasteBin': is_waste_bin,
-                'isFull': is_full,
-                'fillLevel': ai_fill_level,
-                'confidence': confidence,
-                'notes': notes
-            }
-            
-        except Exception as e:
-            self.stdout.write(
-                self.style.ERROR(f"Error in AI analysis for bin {bin.id}: {str(e)}")
-            )
-            # Return default values if AI analysis fails
-            return {
-                'isWasteBin': True,
-                'isFull': bin.fill_level > 80,
-                'fillLevel': bin.fill_level,
-                'confidence': 70,
-                'notes': 'AI tahlil qilishda xatolik yuz berdi'
-            }
+    # REMOVED: generate_simulated_image - we only use REAL camera URLs
+    # REMOVED: analyze_image_with_ai - we use analyze_bin_image_backend from views.py for REAL AI analysis

@@ -1801,15 +1801,16 @@ def analyze_bin_image_backend(base64_image):
     import requests
     import json
     
-    # Get API key from environment or use default
+    # Get API key from environment
     api_key = os.getenv('GEMINI_API_KEY', 'YOUR_API_KEY_HERE')
     if api_key == 'YOUR_API_KEY_HERE':
-        # If no API key is set, return a basic response
+        # CRITICAL: If no API key, return error instead of fake data
+        logger.error("❌ GEMINI_API_KEY not set - cannot perform REAL AI analysis")
         return {
-            'isFull': True,
-            'fillLevel': 90,
-            'confidence': 70,
-            'notes': 'API kaliti ornatilmagan, oddiy tahlil amalga oshirildi'
+            'isFull': False,
+            'fillLevel': 0,
+            'confidence': 0,
+            'notes': '❌ XATOLIK: GEMINI_API_KEY sozlanmagan. Real AI tahlil qilish uchun API kaliti kerak. Iltimos, GEMINI_API_KEY environment variable\'ni sozlang.'
         }
     
     # Prepare the request to Google AI
